@@ -150,12 +150,8 @@ public static class StreamingHelpers
 
                 mediaSource = string.IsNullOrEmpty(streamingRequest.MediaSourceId)
                     ? mediaSources[0]
-                    : mediaSources.First(i => string.Equals(i.Id, streamingRequest.MediaSourceId, StringComparison.Ordinal));
-
-                if (mediaSource is null && Guid.Parse(streamingRequest.MediaSourceId).Equals(streamingRequest.Id))
-                {
-                    mediaSource = mediaSources[0];
-                }
+                    : mediaSources.FirstOrDefault(i => string.Equals(i.Id, streamingRequest.MediaSourceId, StringComparison.Ordinal))
+                        ?? mediaSources[0];
             }
         }
         else
