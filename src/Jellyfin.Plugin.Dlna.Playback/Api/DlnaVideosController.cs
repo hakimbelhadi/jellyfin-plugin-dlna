@@ -317,6 +317,10 @@ public class DlnaVideosController : ControllerBase
                 contentType);
         }
 
+        // Need to start ffmpeg (because media can't be returned directly)
+        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
+        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveVideoFullCommandLine(state, encodingOptions, EncoderPreset.superfast);
+        
         // Some older DLNA renderers (e.g. 2012-2014 era Sony Bravia TVs) do not reliably handle a
         // chunked, length-less HTTP response, which is what this endpoint normally sends for an
         // infinite (Live TV) source, since the underlying output file has no known final size.
