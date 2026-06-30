@@ -317,9 +317,33 @@ public class DlnaVideosController : ControllerBase
                 contentType);
         }
 
-        // Need to start ffmpeg (because media can't be returned directly)
-        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
-        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveVideoFullCommandLine(state, encodingOptions, EncoderPreset.superfast);
+        // Some older DLNA renderers (e.g. 2012-2014 era Sony Bravia TVs) do not reliably handle a
+        // chunked, length-less HTTP response, which is what this endpoint normally sends for an
+        // infinite (Live TV) source, since the underlying output file has no known final size.
+        // Lacking a Content-Length, these renderers tend to consume only the first burst of data,
+        // stall, and disconnect - which (via TranscodeManager's 10 second Progressive-job kill
+        // timer) tears down ffmpeg and forces a fresh transcode from the live point on the
+        // renderer's next request. The result looks like playback stuck replaying the same few
+        // seconds on a loop instead of advancing.
+        //
+        // As a compatibility workaround, advertise a large, generous fake Content-Length for
+        // infinite/live sources so renderers that require one are satisfied. This mirrors what the
+        // (currently unused for this endpoint) "EstimateContentLength" DLNA profile flag was
+        // originally meant to enable. It has no effect on normal playback: a real viewing session
+        // will essentially never reach this size, and if it ever did, the renderer would simply
+        // behave as it already does today (reconnect).
+        if (state.MediaSource.IsInfiniteStream)
+        {
+            const long AssumedMaxStreamingHours = 24;
+            var bitrateBitsPerSecond = (long)(state.TotalOutputBitrate ?? 0);
+            if (bitrateBitsPerSecond <= 0)
+            {
+                bitrateBitsPerSecond = 8_000_000; // fallback assumption: 8 Mbps
+            }
+
+            HttpContext.Response.ContentLength = bitrateBitsPerSecond / 8 * 60 * 60 * AssumedMaxStreamingHours;
+        }
+
         return await FileStreamResponseHelpers.GetTranscodedFile(
             state,
             isHeadRequest,
