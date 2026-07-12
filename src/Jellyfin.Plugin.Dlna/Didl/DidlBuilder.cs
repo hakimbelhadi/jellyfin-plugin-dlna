@@ -401,8 +401,12 @@ public class DidlBuilder
     /// </summary>
     private static string GetDeterministicPlaySessionId(Guid itemId, string deviceId)
     {
+        // SHA256 rather than MD5: not for any security property (this ID is not a secret
+        // and collision resistance is not required for correctness), but the project's
+        // Roslyn analyzers (CA5351) hard-fail the build on any MD5 usage regardless of
+        // purpose, and SHA256 is a drop-in replacement for "deterministic compact ID".
         var data = string.Format(CultureInfo.InvariantCulture, "{0:N}-{1}", itemId, deviceId ?? string.Empty);
-        var hash = MD5.HashData(Encoding.UTF8.GetBytes(data));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(data));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
