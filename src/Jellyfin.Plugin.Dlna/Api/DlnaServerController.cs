@@ -11,6 +11,7 @@ using MediaBrowser.Model.Net;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 
 namespace Jellyfin.Plugin.Dlna.Api;
 
@@ -295,6 +296,18 @@ public class DlnaServerController : ControllerBase
 
     private Task<ControlResponse> ProcessControlRequestInternalAsync(string id, Stream requestStream, IUpnpService service)
     {
+        // Some older DLNA clients (e.g. Sony Bravia 2013 with Opera firmware) send their SOAP
+        // request bodies at a very low byte rate. Kestrel's default MinRequestBodyDataRate (~240
+        // bytes/s) causes it to abort these connections with BadHttpRequestException before the
+        // plugin ever sees the body — resulting in "Reading the request body timed out" errors
+        // and Browse failures on the TV. Disabling the rate limit for this specific request is
+        // safe because it only relaxes timing for the small SOAP XML payloads involved here.
+        var minRateFeature = HttpContext.Features.Get<IHttpMinRequestBodyDataRateFeature>();
+        if (minRateFeature is not null)
+        {
+            minRateFeature.MinDataRate = null;
+        }
+
         return service.ProcessControlRequestAsync(new ControlRequest(Request.Headers)
         {
             InputXml = requestStream,
