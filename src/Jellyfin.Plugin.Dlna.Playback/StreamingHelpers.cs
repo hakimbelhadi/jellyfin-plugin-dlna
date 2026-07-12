@@ -148,6 +148,16 @@ public static class StreamingHelpers
             {
                 var mediaSources = await mediaSourceManager.GetPlaybackMediaSources(libraryManager.GetItemById(streamingRequest.Id), null, false, false, cancellationToken).ConfigureAwait(false);
 
+                // For static library items, the MediaSourceId embedded in the DLNA resource URL
+                // (built at browse/DIDL time via GetStaticMediaSources) is stable and will match an
+                // entry returned by GetPlaybackMediaSources here.
+                //
+                // For dynamic sources such as Live TV channels, the media source is (re)resolved on
+                // every call and may be issued a different Id each time it is opened. In that case the
+                // browse-time MediaSourceId will not be found in this fresh list. Falling back to the
+                // first available media source (instead of throwing) lets playback proceed with
+                // whatever source the provider just handed back, which mirrors how the no-MediaSourceId
+                // branch above already behaves.
                 mediaSource = string.IsNullOrEmpty(streamingRequest.MediaSourceId)
                     ? mediaSources[0]
                     : mediaSources.FirstOrDefault(i => string.Equals(i.Id, streamingRequest.MediaSourceId, StringComparison.Ordinal))
