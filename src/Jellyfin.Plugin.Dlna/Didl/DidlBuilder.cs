@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using Jellyfin.Data.Enums;
@@ -253,6 +254,36 @@ public class DidlBuilder
                 DeviceId = deviceId,
                 MaxBitrate = _profile.MaxStreamingBitrate
             }) ?? throw new InvalidOperationException("No optimal video stream found");
+
+            // ── DLNA Live TV reconnect fix ──────────────────────────────────────
+            // For a normal library item, MediaSourceId is stable, so a renderer that
+            // reconnects (new HTTP request for the same resource URL) still resolves
+            // to the same underlying source. For an infinite stream (Live TV channel),
+            // Jellyfin.Api.Helpers.StreamingHelpers.GetStreamingState only reuses an
+            // already-open stream/transcode job when the incoming request carries a
+            // LiveStreamId or a PlaySessionId that matches an active job; otherwise it
+            // re-opens the tuner from scratch (visible in the server log as a second
+            // "Live stream opened" a few seconds after the first). A LiveStreamId isn't
+            // known yet at browse time (nothing has been opened), and this plugin never
+            // set PlaySessionId here, so the DIDL resource URL carried neither — every
+            // reconnect from the renderer (e.g. after our Content-Length/kill-timer fix
+            // still isn't enough, or simply on a fresh Range request) was treated as a
+            // brand new playback, discarding the in-flight ffmpeg process and restarting
+            // from the live edge. That is the "replays the same few seconds, then stalls"
+            // symptom.
+            //
+            // Fix: assign a deterministic PlaySessionId (stable hash of item + device) so
+            // it is baked into the resource URL that StreamInfo.ToUrl()/ToDlnaUrl() emits.
+            // Since the renderer always requests that same fixed URL, every reconnect now
+            // carries the same PlaySessionId, letting the server find and reuse the
+            // existing transcoding job instead of re-opening the live stream.
+            //
+            // Scoped strictly to infinite streams: normal library items already work
+            // correctly and don't need this, so we leave their behavior untouched.
+            if (streamInfo.PlaySessionId is null && sources.Any(s => s.IsInfiniteStream))
+            {
+                streamInfo.PlaySessionId = GetDeterministicPlaySessionId(video.Id, deviceId);
+            }
         }
 
         var targetWidth = streamInfo.TargetWidth;
@@ -357,6 +388,22 @@ public class DidlBuilder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Computes a stable, deterministic PlaySessionId for an (item, device) pair.
+    /// Used only for infinite streams (Live TV) so that the DLNA resource URL handed
+    /// to a renderer always carries the same PlaySessionId, letting the server find
+    /// and reuse an already-open transcode job/live stream across reconnects instead
+    /// of re-opening the tuner from scratch on every request. See the call site in
+    /// <see cref="AddVideoResource(XmlWriter, BaseItem, string, Filter, StreamInfo?)"/>
+    /// for the full rationale.
+    /// </summary>
+    private static string GetDeterministicPlaySessionId(Guid itemId, string deviceId)
+    {
+        var data = string.Format(CultureInfo.InvariantCulture, "{0:N}-{1}", itemId, deviceId ?? string.Empty);
+        var hash = MD5.HashData(Encoding.UTF8.GetBytes(data));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private void AddVideoResource(XmlWriter writer, Filter filter, string contentFeatures, StreamInfo streamInfo)
