@@ -321,33 +321,19 @@ public class DlnaVideosController : ControllerBase
         var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
         var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveVideoFullCommandLine(state, encodingOptions, EncoderPreset.superfast);
 
-        // ── DLNA Live TV compatibility fix ───────────────────────────────────────
-        // Older DLNA renderers such as the Sony Bravia W-series (2013) expect a
-        // finite HTTP body length. For an infinite (Live TV) source Jellyfin has no
-        // real total size to report, so without this the renderer reads the first
-        // burst of data, stalls, and disconnects. Advertising a large, generous fake
-        // Content-Length (derived from the real output bitrate) keeps it satisfied.
-        // This has no effect on normal playback: a real viewing session will
-        // essentially never reach this size.
-        //
-        // Note: the separate issue of the renderer's *reconnect* re-opening the tuner
-        // from scratch (instead of resuming the same live stream/transcode job) is
-        // fixed upstream in DidlBuilder, by giving the resource URL a stable
-        // PlaySessionId at browse time — that is what determines the transcode job's
-        // cache key (OutputFilePath), and by the time this method runs that key has
-        // already been computed, so nothing done here can influence it.
-        if (state.MediaSource.IsInfiniteStream)
-        {
-            const long AssumedMaxStreamingHours = 24;
-            var bitrateBitsPerSecond = (long)(state.TotalOutputBitrate ?? 0);
-            if (bitrateBitsPerSecond <= 0)
-            {
-                bitrateBitsPerSecond = 8_000_000; // fallback: 8 Mbps
-            }
-
-            HttpContext.Response.ContentLength = bitrateBitsPerSecond / 8 * 60 * 60 * AssumedMaxStreamingHours;
-        }
-
+        // NOTE: an earlier version of this method set a large fake Content-Length here for
+        // infinite (Live TV) streams, as a compatibility guess for older DLNA renderers that
+        // might not tolerate a chunked, length-less response. That guess is now confirmed
+        // WRONG by field logs: with the real output bitrate this produced Content-Length
+        // values in the hundreds-of-GB to multi-TB range, and the Bravia's HEAD/GET requests
+        // to this endpoint took 13-57 seconds to complete before the TV gave up (HTTP 499,
+        // "client closed request") - directly causing the "Lecture non disponible" failure,
+        // not preventing it. The separate reconnect problem this was originally meant to help
+        // with is fixed properly upstream in DidlBuilder (stable PlaySessionId at browse time),
+        // which does not depend on Content-Length at all. Neither Emby's nor Plex's DLNA
+        // implementation sets a Content-Length for live sources either - both just let the
+        // response be chunked, which is the standard/correct behavior for a source of unknown
+        // length. So: no Content-Length override here; let the normal chunked response happen.
         return await FileStreamResponseHelpers.GetTranscodedFile(
             state,
             isHeadRequest,
